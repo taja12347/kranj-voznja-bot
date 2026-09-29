@@ -1,7 +1,7 @@
 import requests
 from bs4 import BeautifulSoup
 import re
-import time
+import json
 import os
 
 WEBHOOK_URL = os.environ["WEBHOOK_URL"]
@@ -21,15 +21,22 @@ params = {
     "complete": "false",
 }
 
-seen = set()
+SEEN_FILE = "seen_terms.json"
+
+if os.path.exists(SEEN_FILE):
+    with open(SEEN_FILE, "r", encoding="utf-8") as f:
+        seen = set(json.load(f))
+else:
+    seen = set()
 
 
 def send_discord(message):
-    requests.post(
+    response = requests.post(
         WEBHOOK_URL,
         json={"content": message},
         timeout=20
     )
+    response.raise_for_status()
 
 
 def check_terms():
@@ -53,7 +60,7 @@ def check_terms():
                 continue
 
             dates = re.findall(
-                r'\d{1,2}\.\s*\d{1,2}\.?\s*2026',
+                r'\d{1,2}\.\s*\d{1,2}\.?\s*20\d{2}',
                 text
             )
 
@@ -70,42 +77,38 @@ def check_terms():
                 term = f"{date} {time_value}"
 
                 if term not in seen:
-                    seen.add(term)
                     found.append(term)
+                    seen.add(term)
 
         except Exception as e:
-            print("Napaka pri strani", page, ":", e)
+            print(f"Napaka pri strani {page}: {e}")
 
     return found
 
 
-print("🚗 Checker za Kranj B je zagnan!")
-print("Preverjam vsakih 60 sekund...")
+print("🚗 Kranj B checker zagnan.")
+
+new_terms = check_terms()
+
+for term in new_terms:
+
+    parts = term.split()
+
+    message = (
+        "🚨 NOV TERMIN ZA GLAVNO VOŽNJO!\n\n"
+        f"📅 Datum: {parts[0]} {parts[1]} {parts[2]}\n"
+        f"🕐 Ura: {parts[3]}\n"
+        "📍 Kranj\n"
+        "🚗 Kategorija: B\n\n"
+        "🔗 Odpri eUpravo:\n"
+        "https://e-uprava.gov.si/si/javne-evidence/prosti-termini-zemljevid.html"
+    )
+
+    send_discord(message)
+    print("NOV TERMIN:", term)
 
 
-while True:
+with open(SEEN_FILE, "w", encoding="utf-8") as f:
+    json.dump(sorted(seen), f, ensure_ascii=False, indent=2)
 
-    new_terms = check_terms()
-
-    for term in new_terms:
-
-        parts = term.split()
-
-        message = (
-            "🚨 NOV TERMIN ZA GLAVNO VOŽNJO!\n\n"
-            f"📅 Datum: {parts[0]} {parts[1]} {parts[2]}\n"
-            f"🕐 Ura: {parts[3]}\n"
-            "📍 Kranj\n"
-            "🚗 Kategorija: B\n\n"
-            "🔗 Odpri eUpravo:\n"
-            "https://e-uprava.gov.si/si/javne-evidence/prosti-termini-zemljevid.html"
-        )
-
-        send_discord(message)
-
-        print("NOV TERMIN:", term)
-
-    if not new_terms:
-        print("Ni novih terminov.")
-
-    time.sleep(60)
+print(f"Preverjanje končano. Najdenih novih terminov: {len(new_terms)}")
