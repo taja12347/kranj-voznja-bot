@@ -8,7 +8,7 @@ WEBHOOK_URL = os.environ["WEBHOOK_URL"]
 
 BASE_URL = "https://e-uprava.gov.si/si/javne-evidence/prosti-termini-zemljevid/content/singleton.html"
 
-params = {
+BASE_PARAMS = {
     "lang": "si",
     "type": "1",
     "cat": "6",
@@ -44,6 +44,7 @@ def check_terms():
 
     for page in range(1, 14):
 
+        params = BASE_PARAMS.copy()
         params["page"] = page
 
         try:
@@ -53,32 +54,62 @@ def check_terms():
                 timeout=20
             )
 
+            response.raise_for_status()
+
             soup = BeautifulSoup(response.text, "html.parser")
-            text = soup.get_text(" ", strip=True)
 
-            if "KRANJ" not in text.upper():
-                continue
+            # Poiščemo vrstice s podatki
+            rows = soup.find_all("tr")
 
-            dates = re.findall(
-                r'\d{1,2}\.\s*\d{1,2}\.?\s*20\d{2}',
-                text
-            )
+            for row in rows:
 
-            times = re.findall(
-                r'\b\d{1,2}[.:]\d{2}\b',
-                text
-            )
+                cells = [
+                    cell.get_text(" ", strip=True)
+                    for cell in row.find_all(["td", "th"])
+                ]
 
-            if dates and times:
+                if len(cells) < 5:
+                    continue
 
-                date = dates[0]
-                time_value = times[0]
+                # Pričakujemo:
+                # datum | ura | lokacija | kategorija | prosta mesta
+                date = cells[0]
+                time_value = cells[1]
+                location = cells[2]
+                category = cells[3]
+                free_places = cells[4]
 
-                term = f"{date} {time_value}"
+                # Samo Kranj + B
+                if "KRANJ" not in location.upper():
+                    continue
 
-                if term not in seen:
-                    found.append(term)
-                    seen.add(term)
+                if not re.search(r"\bB\b", category.upper()):
+                    continue
+
+                # Mora biti datum
+                if not re.match(r"^\d{1,2}\.\s*\d{1,2}\.\s*\d{4}", date):
+                    continue
+
+                # Mora biti ura
+                if not re.match(r"^\d{1,2}:\d{2}$", time_value):
+                    continue
+
+                term_id = (
+                    f"{date}|{time_value}|"
+                    f"{location}|{category}|{free_places}"
+                )
+
+                if term_id not in seen:
+                    found.append({
+                        "id": term_id,
+                        "date": date,
+                        "time": time_value,
+                        "location": location,
+                        "category": category,
+                        "free_places": free_places,
+                    })
+
+                    seen.add(term_id)
 
         except Exception as e:
             print(f"Napaka pri strani {page}: {e}")
@@ -92,23 +123,34 @@ new_terms = check_terms()
 
 for term in new_terms:
 
-    parts = term.split()
-
     message = (
-        "🚨 NOV TERMIN ZA GLAVNO VOŽNJO!\n\n"
-        f"📅 Datum: {parts[0]} {parts[1]} {parts[2]}\n"
-        f"🕐 Ura: {parts[3]}\n"
-        "📍 Kranj\n"
-        "🚗 Kategorija: B\n\n"
-        "🔗 Odpri eUpravo:\n"
+        "🚨 **NOV TERMIN ZA GLAVNO VOŽNJO!**\n\n"
+        f"📅 **Datum:** {term['date']}\n"
+        f"🕐 **Ura:** {term['time']}\n"
+        "📍 **Kranj**\n"
+        f"🚗 **Kategorija:** {term['category']}\n"
+        f"🟢 **Prosta mesta:** {term['free_places']}\n\n"
+        "🔗 **Odpri eUpravo:**\n"
         "https://e-uprava.gov.si/si/javne-evidence/prosti-termini-zemljevid.html"
     )
 
     send_discord(message)
-    print("NOV TERMIN:", term)
+
+    print(
+        "NOV TERMIN:",
+        term["date"],
+        term["time"],
+        term["category"],
+        term["free_places"]
+    )
 
 
 with open(SEEN_FILE, "w", encoding="utf-8") as f:
-    json.dump(sorted(seen), f, ensure_ascii=False, indent=2)
+    json.dump(
+        sorted(seen),
+        f,
+        ensure_ascii=False,
+        indent=2
+    )
 
-print(f"Preverjanje končano. Najdenih novih terminov: {len(new_terms)}")
+print(f"Preverjanje končano. Novi termini: {len(new_terms)}")
